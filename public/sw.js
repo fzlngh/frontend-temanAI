@@ -1,4 +1,4 @@
-const CACHE_NAME = "temanai-shell-v1";
+const CACHE_NAME = "temanai-shell-v1.2";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(["/offline.html", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"])));

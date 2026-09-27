@@ -2,7 +2,7 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "TemanAI — Chatbot Bahasa Indonesia",
+    name: "TemanAI",
     short_name: "TemanAI",
     description: "Asisten AI untuk menemani ide dan keseharianmu.",
     start_url: "/",
