@@ -10,8 +10,14 @@ type Role = "user" | "assistant";
 type Message = { role: Role; content: string; id: string; sequence: number };
 type Conversation = { id: string; title: string; updated_at: string };
 type ServiceStatus = "checking" | "online" | "no-key" | "offline";
+type SelectedAttachment = { id: string; file: File; mimeType: string; previewUrl?: string };
+type ApiAttachment = { name: string; mimeType: string; data: string };
 
 const API_URL = (process.env.NEXT_PUBLIC_CHAT_API_URL || "http://localhost:8080").replace(/\/+$/, "");
+const MAX_ATTACHMENT_COUNT = 4;
+const MAX_ATTACHMENT_SIZE = 6 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_SIZE = 12 * 1024 * 1024;
+const ATTACHMENT_MIME_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
 
 const suggestions = [
   { icon: "✳", title: "Bantu aku cari ide", prompt: "Bantu aku mencari ide kreatif untuk akhir pekan ini." },
@@ -41,6 +47,7 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     arrow: <><path d="M7 17 17 7M7 7h10v10" /></>,
     chevron: <><path d="m9 18 6-6-6-6" /></>,
     copy: <><rect x="8" y="8" width="13" height="13" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" /></>,
+    attach: <><path d="m20.4 11.6-8.9 8.9a5.5 5.5 0 0 1-7.8-7.8l9.2-9.2a3.7 3.7 0 0 1 5.2 5.2l-9.2 9.2a1.8 1.8 0 0 1-2.6-2.6l8.5-8.5" /></>,
   };
   return <svg {...shared}>{paths[name] || paths.spark}</svg>;
 }
@@ -52,6 +59,43 @@ function safeLinkTarget(href: string): string | null {
   } catch {
     return null;
   }
+}
+
+function getAttachmentMimeType(file: File): string | null {
+  const mimeType = file.type.toLowerCase();
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  const extensionMimeType: Record<string, string> = {
+    pdf: "application/pdf",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+  };
+  const normalizedMimeType = mimeType === "image/jpg" ? "image/jpeg" : mimeType;
+  if (ATTACHMENT_MIME_TYPES.includes(normalizedMimeType)) return normalizedMimeType;
+  if (!mimeType) return extensionMimeType[extension ?? ""] ?? null;
+  return null;
+}
+
+function readAttachmentAsBase64(file: File, onProgress?: (loaded: number) => void): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const commaIndex = result.indexOf(",");
+      if (commaIndex < 0) {
+        reject(new Error(`Berkas ${file.name} tidak dapat dibaca.`));
+        return;
+      }
+      resolve(result.slice(commaIndex + 1));
+    };
+    reader.onerror = () => reject(new Error(`Berkas ${file.name} tidak dapat dibaca.`));
+    reader.onabort = () => reject(new Error(`Pembacaan berkas ${file.name} dibatalkan.`));
+    reader.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(event.loaded);
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function renderInlineFormattedText(text: string, keyPrefix = "inline"): React.ReactNode[] {
@@ -205,6 +249,9 @@ export default function Chat() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
   const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<SelectedAttachment[]>([]);
+  const [uploadPhase, setUploadPhase] = useState<"idle" | "preparing" | "sending">("idle");
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [editingMessageId, setEditingMessageId] = useState("");
   const [editingDraft, setEditingDraft] = useState("");
   const [loading, setLoading] = useState(false);
@@ -219,10 +266,71 @@ export default function Chat() {
   const [userNameDraft, setUserNameDraft] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const objectUrls = useRef(new Map<string, string>());
   const bottomRef = useRef<HTMLDivElement>(null);
   const requestSequence = useRef(0);
   const historyRequestSequence = useRef(0);
   const activeRequest = useRef<AbortController | null>(null);
+
+  useEffect(() => () => {
+    objectUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    objectUrls.current.clear();
+  }, []);
+
+  const clearAttachments = () => {
+    objectUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    objectUrls.current.clear();
+    setAttachments([]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setUploadProgress(0);
+    setUploadPhase("idle");
+  };
+
+  const handleAttachmentSelection = (files: FileList | null) => {
+    if (!files?.length) return;
+    const additions: SelectedAttachment[] = [];
+    const errors: string[] = [];
+    let count = attachments.length;
+    let totalSize = attachments.reduce((total, item) => total + item.file.size, 0);
+
+    for (const file of Array.from(files)) {
+      if (count >= MAX_ATTACHMENT_COUNT) {
+        errors.push(`Maksimal ${MAX_ATTACHMENT_COUNT} file dalam satu pesan.`);
+        break;
+      }
+      if (file.size > MAX_ATTACHMENT_SIZE) {
+        errors.push(`${file.name}: ukuran file melebihi 6 MiB.`);
+        continue;
+      }
+      const mimeType = getAttachmentMimeType(file);
+      if (!mimeType) {
+        errors.push(`${file.name}: gunakan PDF, JPEG, PNG, atau WebP.`);
+        continue;
+      }
+      if (totalSize + file.size > MAX_TOTAL_ATTACHMENT_SIZE) {
+        errors.push("Total ukuran file dalam satu pesan tidak boleh melebihi 12 MiB.");
+        continue;
+      }
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const previewUrl = mimeType.startsWith("image/") ? URL.createObjectURL(file) : undefined;
+      if (previewUrl) objectUrls.current.set(id, previewUrl);
+      additions.push({ id, file, mimeType, previewUrl });
+      count += 1;
+      totalSize += file.size;
+    }
+
+    if (additions.length) setAttachments((current) => [...current, ...additions]);
+    setError(errors.join(" "));
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removeAttachment = (id: string) => {
+    const url = objectUrls.current.get(id);
+    if (url) URL.revokeObjectURL(url);
+    objectUrls.current.delete(id);
+    setAttachments((current) => current.filter((item) => item.id !== id));
+  };
 
   useEffect(() => {
     const storedTheme = window.localStorage.getItem("temanai-theme");
@@ -331,7 +439,7 @@ export default function Chat() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
   }, [draft]);
 
-  const askAssistant = async (history: Message[]) => {
+  const askAssistant = async (history: Message[], requestAttachments: ApiAttachment[] = []) => {
     if (!session) throw new Error("Sesi masuk sudah berakhir. Silakan masuk kembali.");
     const recent = history.slice(-20).map(({ role, content }) => ({ role, content }));
     if (recent[0]?.role === "assistant") recent.shift();
@@ -343,7 +451,11 @@ export default function Chat() {
         "Content-Type": "application/json",
         Authorization: `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ messages: recent, assistantName }),
+      body: JSON.stringify({
+        messages: recent,
+        assistantName,
+        ...(requestAttachments.length ? { attachments: requestAttachments } : {}),
+      }),
       signal: controller.signal,
     });
     const data: { reply?: string; error?: string } = await response.json().catch(() => ({}));
@@ -375,20 +487,40 @@ export default function Chat() {
     setMessages((data ?? []) as Message[]);
     setActiveConversationId(conversationId);
     setDraft("");
+    clearAttachments();
     setEditingMessageId("");
     setSidebarOpen(false);
   };
 
   const sendMessage = async (text = draft) => {
-    const content = text.trim();
-    if (!content || loading || !supabase || !session) return;
-
-    setDraft("");
+    if (loading || !supabase || !session) return;
+    const selectedAttachments = [...attachments];
+    const question = text.trim() || (selectedAttachments.length ? "Tolong bantu analisis file terlampir." : "");
+    if (!question) return;
+    const content = selectedAttachments.length
+      ? `${question}\n\nLampiran: ${selectedAttachments.map(({ file }) => file.name).join(", ")}`
+      : question;
     setError("");
     setLoading(true);
+    setUploadPhase(selectedAttachments.length ? "preparing" : "idle");
+    setUploadProgress(0);
     requestSequence.current += 1;
     const requestId = requestSequence.current;
     try {
+      const totalSize = selectedAttachments.reduce((total, item) => total + item.file.size, 0);
+      let completedSize = 0;
+      const requestAttachments: ApiAttachment[] = [];
+      for (const item of selectedAttachments) {
+        const data = await readAttachmentAsBase64(item.file, (loaded) => {
+          if (totalSize > 0) setUploadProgress(Math.min(99, Math.round(((completedSize + loaded) / totalSize) * 100)));
+        });
+        requestAttachments.push({ name: item.file.name, mimeType: item.mimeType, data });
+        completedSize += item.file.size;
+        setUploadProgress(totalSize ? Math.min(99, Math.round((completedSize / totalSize) * 100)) : 0);
+        if (requestId !== requestSequence.current) return;
+      }
+      setUploadPhase(selectedAttachments.length ? "sending" : "idle");
+
       let conversationId = activeConversationId;
       if (!conversationId) {
         const { data: conversation, error: createError } = await supabase
@@ -412,7 +544,7 @@ export default function Chat() {
       const updated = [...messages, savedUserMessage as Message];
       setMessages(updated);
 
-      const reply = await askAssistant(updated);
+      const reply = await askAssistant(updated, requestAttachments);
       if (requestId !== requestSequence.current) return;
       const { data: savedAssistantMessage, error: saveAssistantError } = await supabase
         .from("messages")
@@ -421,6 +553,8 @@ export default function Chat() {
         .single();
       if (saveAssistantError) throw saveAssistantError;
       setMessages((current) => [...current, savedAssistantMessage as Message]);
+      setDraft("");
+      clearAttachments();
       await loadConversations();
       void checkHealth();
     } catch (sendError) {
@@ -429,6 +563,7 @@ export default function Chat() {
       if (requestId === requestSequence.current) {
         activeRequest.current = null;
         setLoading(false);
+        setUploadPhase("idle");
         window.setTimeout(() => textareaRef.current?.focus(), 0);
       }
     }
@@ -526,6 +661,7 @@ export default function Chat() {
     activeRequest.current = null;
     setMessages([]);
     setDraft("");
+    clearAttachments();
     setActiveConversationId("");
     setEditingMessageId("");
     setError("");
@@ -539,6 +675,7 @@ export default function Chat() {
     activeRequest.current?.abort();
     activeRequest.current = null;
     setLoading(false);
+    clearAttachments();
     const { error: signOutError } = await supabase.auth.signOut();
     if (signOutError) setError(`Gagal keluar: ${signOutError.message}`);
   };
@@ -760,7 +897,7 @@ export default function Chat() {
                       </div>
                     ) : (
                       <div className="message-content">
-                        {message.role === "assistant" ? renderFormattedText(message.content) : message.content}
+                        {message.role === "assistant" ? renderFormattedText(message.content) : <p>{message.content}</p>}
                       </div>
                     )}
                     {message.role === "assistant" && (
@@ -808,6 +945,41 @@ export default function Chat() {
             <div className="setup-notice">Backend belum terhubung. Pastikan server Go berjalan di <code>localhost:8080</code>.</div>
           )}
           <form className="composer" onSubmit={submit}>
+            <input
+              ref={fileInputRef}
+              className="visually-hidden"
+              type="file"
+              accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp"
+              multiple
+              aria-label="Pilih file PDF atau foto"
+              onChange={(event) => handleAttachmentSelection(event.currentTarget.files)}
+            />
+            {attachments.length > 0 && (
+              <ul className="attachment-list" aria-label="Lampiran terpilih">
+                {attachments.map(({ id, file, mimeType, previewUrl }) => (
+                  <li className="attachment-chip" key={id}>
+                    {previewUrl ? (
+                      // Local object URLs are kept only in memory and revoked when removed.
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img className="attachment-thumbnail" src={previewUrl} alt="" />
+                    ) : (
+                      <span className="attachment-file-icon" aria-hidden="true">PDF</span>
+                    )}
+                    <span className="attachment-chip-copy">
+                      <span className="attachment-name" title={file.name}>{file.name}</span>
+                      <span className="attachment-details">{mimeType === "application/pdf" ? "PDF" : "Foto"} · {(file.size / (1024 * 1024)).toFixed(1)} MiB</span>
+                    </span>
+                    <button
+                      className="attachment-remove"
+                      type="button"
+                      aria-label={`Hapus lampiran ${file.name}`}
+                      disabled={loading}
+                      onClick={() => removeAttachment(id)}
+                    >×</button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <textarea
               ref={textareaRef}
               rows={1}
@@ -818,10 +990,38 @@ export default function Chat() {
               onKeyDown={handleKeyDown}
               disabled={loading}
             />
+            <p className="attachment-help">Punya PDF atau foto? Lampirkan lalu tanyakan apa yang ingin dibantu. Dokumen kosong atau hasil scan? Ceritakan bagian yang perlu diperiksa. Maks. 4 file, 6 MiB per file.</p>
+            {uploadPhase !== "idle" && (
+              <div className={`upload-status ${uploadPhase}`} role="status" aria-live="polite">
+                <span className="upload-spinner" aria-hidden="true" />
+                {uploadPhase === "preparing" ? `Menyiapkan lampiran ${uploadProgress}%` : "Mengirim lampiran…"}
+                {uploadPhase === "preparing" && (
+                  <span
+                    className="upload-progress-track"
+                    role="progressbar"
+                    aria-label="Progres menyiapkan lampiran"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={uploadProgress}
+                  ><span style={{ width: `${uploadProgress}%` }} /></span>
+                )}
+              </div>
+            )}
             <div className="composer-footer">
-              <span className="composer-tip"><span>↵</span> kirim <b>·</b> <span>⇧ ↵</span> baris baru</span>
-              <button className="send-button" type="submit" disabled={!draft.trim() || loading} aria-label="Kirim pesan">
-                <Icon name="send" size={17} />
+              <div className="composer-tools">
+                <button
+                  className="attach-button"
+                  type="button"
+                  disabled={loading || attachments.length >= MAX_ATTACHMENT_COUNT}
+                  aria-label={`Lampirkan PDF atau foto${attachments.length ? `, ${attachments.length} dari ${MAX_ATTACHMENT_COUNT} file dipilih` : ""}`}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Icon name="attach" size={16} /><span>Lampirkan</span>
+                </button>
+                <span className="composer-tip"><span>↵</span> kirim <b>·</b> <span>⇧ ↵</span> baris baru</span>
+              </div>
+              <button className="send-button" type="submit" disabled={(!draft.trim() && !attachments.length) || loading} aria-label="Kirim pesan">
+                {loading && uploadPhase === "sending" ? <span className="send-spinner" aria-hidden="true" /> : <Icon name="send" size={17} />}
               </button>
             </div>
           </form>

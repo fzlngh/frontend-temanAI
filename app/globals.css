@@ -254,16 +254,38 @@ button { color: inherit; }
 .composer-wrap { width: min(760px, calc(100% - 64px)); flex: 0 0 auto; margin: 0 auto; padding: 8px 0 15px; }
 .composer { padding: 12px 13px 8px 17px; border: 1px solid #e7ece6; border-radius: 14px; background: #fff; box-shadow: 0 5px 22px #273b2f08; transition: border-color .18s, box-shadow .18s; }
 .composer:focus-within { border-color: #c6d9c8; box-shadow: 0 5px 24px #273b2f0d, 0 0 0 3px #edf4ee; }
+.composer { min-width: 0; max-width: 100%; }
 .composer textarea { display: block; width: 100%; min-height: 27px; max-height: 180px; resize: none; border: 0; outline: 0; background: transparent; color: #33473b; font-size: 12px; line-height: 1.65; }
 .composer textarea::placeholder { color: #a5aea7; }
 .composer textarea:disabled { opacity: .7; }
 .composer-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 5px; }
+.composer-tools { display: flex; min-width: 0; align-items: center; gap: 13px; }
+.attach-button { display: inline-flex; min-height: 31px; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid #e4ebe4; border-radius: 8px; background: #fbfcfa; color: #5a7461; font-size: 10px; font-weight: 600; cursor: pointer; }
+.attach-button:hover:not(:disabled) { border-color: #c5d8c8; background: #f2f7f1; }
+.attach-button:disabled { opacity: .5; cursor: default; }
 .composer-tip { color: #a6afa8; font-size: 9px; }
 .composer-tip span { color: #849388; font-weight: 600; }
 .composer-tip b { padding: 0 3px; color: #c6ccc6; font-weight: 400; }
 .send-button { display: grid; width: 31px; height: 31px; place-items: center; border: 0; border-radius: 9px; background: #48795f; color: white; cursor: pointer; transition: background .16s, transform .16s; }
 .send-button:hover:not(:disabled) { transform: translateY(-1px); background: #35674c; }
 .send-button:disabled { background: #dce5dc; color: #a0b0a0; cursor: default; }
+.attachment-list { display: flex; max-height: 112px; flex-wrap: wrap; gap: 7px; overflow-y: auto; margin: 0 0 8px; padding: 0; list-style: none; }
+.attachment-chip { display: flex; min-width: 0; max-width: min(250px, 100%); min-height: 48px; align-items: center; gap: 8px; padding: 5px 7px; border: 1px solid #e5ebe4; border-radius: 9px; background: #f9fbf8; }
+.attachment-thumbnail, .attachment-file-icon { display: grid; width: 36px; height: 36px; flex: 0 0 36px; place-items: center; border-radius: 6px; object-fit: cover; }
+.attachment-file-icon { background: #edf3ed; color: #55745e; font-size: 9px; font-weight: 700; }
+.attachment-chip-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
+.attachment-name { overflow: hidden; color: #43564a; font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-details { color: #919d94; font-size: 9px; }
+.attachment-remove { display: grid; width: 26px; height: 26px; flex: 0 0 26px; place-items: center; border: 0; border-radius: 6px; background: transparent; color: #87958b; font-size: 18px; line-height: 1; cursor: pointer; }
+.attachment-remove:hover:not(:disabled) { background: #f3e9e7; color: #9a544c; }
+.attachment-remove:disabled { opacity: .45; cursor: default; }
+.attachment-help { margin: 1px 0 6px; color: #98a39b; font-size: 9px; line-height: 1.45; }
+.upload-status { display: flex; min-width: 0; align-items: center; gap: 7px; margin: 0 0 6px; color: #63816b; font-size: 9px; }
+.upload-spinner, .send-spinner { width: 13px; height: 13px; flex: 0 0 13px; border: 2px solid #d5e3d7; border-top-color: #4c8060; border-radius: 50%; animation: spin .75s linear infinite; }
+.send-spinner { width: 15px; height: 15px; flex-basis: 15px; border-color: #ffffff70; border-top-color: #fff; }
+.upload-progress-track { height: 4px; flex: 1; overflow: hidden; border-radius: 4px; background: #e8eee8; }
+.upload-progress-track > span { display: block; height: 100%; border-radius: inherit; background: #5d9069; transition: width .12s linear; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; }
 .disclaimer { margin: 8px 0 0; color: #adb5af; text-align: center; font-size: 9px; }
 .error-notice, .setup-notice { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; padding: 9px 11px; border-radius: 8px; color: #9a544c; background: #fff4f1; font-size: 10px; line-height: 1.5; }
 .error-notice button { border: 0; background: transparent; color: inherit; font-size: 17px; cursor: pointer; }
@@ -386,6 +408,17 @@ html[data-theme="dark"] .sidebar-note strong { color: #dce6de; }
 html[data-theme="dark"] .message-row.user .message-content { background: #26372b; color: #dce6de; }
 html[data-theme="dark"] .composer textarea { color: #e0e9e1; }
 html[data-theme="dark"] .composer textarea::placeholder { color: #87978c; }
+html[data-theme="dark"] .attach-button,
+html[data-theme="dark"] .attachment-chip { border-color: #35473a; background: #17221b; color: #c1d6c5; }
+html[data-theme="dark"] .attach-button:hover:not(:disabled) { background: #26372b; }
+html[data-theme="dark"] .attachment-file-icon { background: #26372b; color: #b8ddbd; }
+html[data-theme="dark"] .attachment-name { color: #dce6de; }
+html[data-theme="dark"] .attachment-details,
+html[data-theme="dark"] .attachment-help { color: #9caaa0; }
+html[data-theme="dark"] .attachment-remove { color: #a5b3a9; }
+html[data-theme="dark"] .attachment-remove:hover:not(:disabled) { background: #3a2522; color: #ffb5a9; }
+html[data-theme="dark"] .upload-status { color: #b8ddbd; }
+html[data-theme="dark"] .upload-progress-track { background: #2b3a30; }
 html[data-theme="dark"] .error-notice { color: #ffb5a9; background: #3a2522; }
 html[data-theme="dark"] .setup-notice { color: #e7c88a; background: #342e20; }
 html[data-theme="dark"] .copy-button,
@@ -401,6 +434,7 @@ html[data-theme="dark"] .edit-message button:last-child { border-color: #477960;
 
 @keyframes rise-in { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes dot-pulse { 0%, 60%, 100% { opacity: .45; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 @media (min-width: 1500px) {
   .sidebar { width: 270px; flex-basis: 270px; padding-right: 18px; padding-left: 18px; }
@@ -414,6 +448,7 @@ html[data-theme="dark"] .edit-message button:last-child { border-color: #477960;
   .sidebar-backdrop { position: fixed; z-index: 20; inset: 0; display: block; border: 0; background: #18251e70; }
   .chat-panel { border: 0; border-radius: 0; }
   .topbar { height: calc(55px + env(safe-area-inset-top)); min-height: calc(55px + env(safe-area-inset-top)); flex-basis: calc(55px + env(safe-area-inset-top)); gap: 6px; padding: env(safe-area-inset-top) 11px 0; }
+  .topbar, .topbar-actions { min-width: 0; }
   .mobile-menu-button { display: block; flex: 0 0 32px; }
   .mobile-brand { display: inline-flex; gap: 7px; font-size: 16px; }
   .mobile-brand .brand-mark { width: 28px; height: 28px; border-radius: 9px; }
@@ -435,6 +470,9 @@ html[data-theme="dark"] .edit-message button:last-child { border-color: #477960;
   .message-list, .composer-wrap { width: calc(100% - 32px); }
   .message-list { padding-top: 24px; }
   .composer-wrap { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  .composer { padding-right: 10px; padding-left: 11px; }
+  .composer-tools { gap: 8px; }
+  .attachment-chip { max-width: 100%; }
   .composer textarea { max-height: 30dvh; }
   .message-body { max-width: 86%; }
   .message-actions { opacity: 1; }
@@ -475,7 +513,14 @@ html[data-theme="dark"] .edit-message button:last-child { border-color: #477960;
   .welcome-footnote { margin-top: 13px; }
   .message-list { padding-top: 16px; }
   .composer-wrap { padding-top: 5px; }
+  .attachment-help { margin-bottom: 3px; }
   .disclaimer { margin-top: 5px; }
+}
+
+@media (max-height: 520px) and (max-width: 760px) {
+  .attachment-help, .disclaimer { display: none; }
+  .attachment-list { max-height: 68px; }
+  .composer-wrap { padding-bottom: max(5px, env(safe-area-inset-bottom)); }
 }
 
 @media (max-width: 350px) {
