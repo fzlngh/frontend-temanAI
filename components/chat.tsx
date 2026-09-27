@@ -990,7 +990,6 @@ export default function Chat() {
               onKeyDown={handleKeyDown}
               disabled={loading}
             />
-            <p className="attachment-help">Punya PDF atau foto? Lampirkan lalu tanyakan apa yang ingin dibantu. Dokumen kosong atau hasil scan? Ceritakan bagian yang perlu diperiksa. Maks. 4 file, 6 MiB per file.</p>
             {uploadPhase !== "idle" && (
               <div className={`upload-status ${uploadPhase}`} role="status" aria-live="polite">
                 <span className="upload-spinner" aria-hidden="true" />
