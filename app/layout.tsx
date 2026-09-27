@@ -4,7 +4,7 @@ import PWARegister from "@/components/pwa-register";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "TemanAI — Teman ngobrol, teman berpikir",
+  title: "TemanAI Teman ngobrol, teman berpikir",
   description: "Asisten AI berbahasa Indonesia untuk menemani ide dan keseharianmu.",
   applicationName: "TemanAI",
   appleWebApp: { capable: true, statusBarStyle: "default", title: "TemanAI" },
