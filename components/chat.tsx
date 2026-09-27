@@ -45,58 +45,155 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
   return <svg {...shared}>{paths[name] || paths.spark}</svg>;
 }
 
-function renderInlineFormattedText(text: string): React.ReactNode[] {
-  const tokens = text.split(/(\*\*[\s\S]+?\*\*|__[\s\S]+?__|\*[^*\n]+\*|(?<![\p{L}\p{N}])_[^_\n]+?_(?![\p{L}\p{N}]))/gu);
+function safeLinkTarget(href: string): string | null {
+  try {
+    const url = new URL(href);
+    return ["https:", "http:", "mailto:"].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
 
-  return tokens.map((token, index) => {
-    if (token.startsWith("**") && token.endsWith("**")) {
-      return <strong key={index}>{renderInlineFormattedText(token.slice(2, -2))}</strong>;
+function renderInlineFormattedText(text: string, keyPrefix = "inline"): React.ReactNode[] {
+  const pattern = /(\[[^\]]+\]\([^)]+\)|https?:\/\/[^\s<>]+|`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|(?<![\p{L}\p{N}])_[^_\n]+?_(?![\p{L}\p{N}]))/gu;
+  const nodes: React.ReactNode[] = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const token = match[0];
+    const index = match.index ?? 0;
+    if (index > lastIndex) nodes.push(text.slice(lastIndex, index));
+    const key = `${keyPrefix}-${index}`;
+    const markdownLink = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    const rawUrl = token.match(/^https?:\/\/[^\s<>]+$/)
+      ? token.replace(/[.,!?;:)\]]+$/g, "")
+      : "";
+    const href = safeLinkTarget(markdownLink?.[2] ?? rawUrl);
+    const visibleLink = rawUrl ? token.slice(0, rawUrl.length) : token;
+
+    if (href) {
+      nodes.push(<a key={key} href={href} target="_blank" rel="noopener noreferrer">{markdownLink?.[1] ?? visibleLink}</a>);
+      if (rawUrl && rawUrl.length < token.length) nodes.push(token.slice(rawUrl.length));
+    } else if (token.startsWith("`") && token.endsWith("`")) {
+      nodes.push(<code key={key}>{token.slice(1, -1)}</code>);
+    } else if ((token.startsWith("**") && token.endsWith("**")) || (token.startsWith("__") && token.endsWith("__"))) {
+      nodes.push(<strong key={key}>{renderInlineFormattedText(token.slice(2, -2), key)}</strong>);
+    } else if ((token.startsWith("*") && token.endsWith("*")) || (token.startsWith("_") && token.endsWith("_"))) {
+      nodes.push(<em key={key}>{renderInlineFormattedText(token.slice(1, -1), key)}</em>);
+    } else {
+      nodes.push(token);
     }
-    if (token.startsWith("__") && token.endsWith("__")) {
-      return <strong key={index}>{renderInlineFormattedText(token.slice(2, -2))}</strong>;
+    lastIndex = index + token.length;
+  }
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes;
+}
+
+function CodeBlock({ code, language }: { code: string; language: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // Keep the code readable even when clipboard access is unavailable.
     }
-    if ((token.startsWith("*") && token.endsWith("*")) || (token.startsWith("_") && token.endsWith("_"))) {
-      return <em key={index}>{renderInlineFormattedText(token.slice(1, -1))}</em>;
-    }
-    return token;
-  });
+  };
+
+  return (
+    <div className="code-block">
+      <div className="code-block-header">
+        <span>{language || "Code"}</span>
+        <button type="button" onClick={() => void copyCode()} aria-label="Salin blok kode">
+          {copied ? "Tersalin" : "Salin kode"}
+        </button>
+      </div>
+      <pre><code>{code}</code></pre>
+    </div>
+  );
 }
 
 function renderFormattedText(text: string): React.ReactNode[] {
+  const lines = text.split(/\r?\n/);
   const blocks: React.ReactNode[] = [];
-  const paragraph: string[] = [];
-  let bullets: string[] = [];
+  let index = 0;
+  const tableCells = (row: string) => row.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
 
-  const flushParagraph = () => {
-    if (paragraph.length === 0) return;
-    blocks.push(<p key={`p-${blocks.length}`}>{paragraph.map((line, index) => (
-      <span key={index}>{index > 0 && <br />}{renderInlineFormattedText(line)}</span>
-    ))}</p>);
-    paragraph.length = 0;
-  };
-  const flushBullets = () => {
-    if (bullets.length === 0) return;
-    blocks.push(<ul key={`ul-${blocks.length}`}>{bullets.map((line, index) => (
-      <li key={index}>{renderInlineFormattedText(line)}</li>
-    ))}</ul>);
-    bullets = [];
-  };
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim()) { index += 1; continue; }
 
-  for (const line of text.split(/\r?\n/)) {
-    const bullet = line.match(/^\s*\* (.+)$/);
-    if (bullet) {
-      flushParagraph();
-      bullets.push(bullet[1]);
-    } else if (line.trim() === "") {
-      flushBullets();
-      flushParagraph();
-    } else {
-      flushBullets();
-      paragraph.push(line);
+    const separator = lines[index + 1]?.trim();
+    if (line.includes("|") && separator && /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(separator)) {
+      const headers = tableCells(line);
+      index += 2;
+      const rows: string[][] = [];
+      while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+        rows.push(tableCells(lines[index]));
+        index += 1;
+      }
+      blocks.push(
+        <div className="table-scroll" key={`table-${blocks.length}`} role="region" aria-label="Tabel jawaban" tabIndex={0}>
+          <table>
+            <thead><tr>{headers.map((cell, cellIndex) => <th key={cellIndex} scope="col">{renderInlineFormattedText(cell, `th-${cellIndex}`)}</th>)}</tr></thead>
+            <tbody>{rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>{headers.map((_, cellIndex) => <td key={cellIndex}>{renderInlineFormattedText(row[cellIndex] ?? "", `td-${rowIndex}-${cellIndex}`)}</td>)}</tr>
+            ))}</tbody>
+          </table>
+        </div>,
+      );
+      continue;
     }
+
+    const fence = line.match(/^\s*```(.*)$/);
+    if (fence) {
+      const language = fence[1].trim().split(/\s+/, 1)[0] || "";
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^\s*```\s*$/.test(lines[index])) codeLines.push(lines[index++]);
+      if (index < lines.length) index += 1;
+      blocks.push(<CodeBlock key={`code-${blocks.length}`} code={codeLines.join("\n")} language={language} />);
+      continue;
+    }
+
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
+    if (heading) {
+      const level = heading[1].length;
+      const content = renderInlineFormattedText(heading[2], `heading-${blocks.length}`);
+      const key = `heading-${blocks.length}`;
+      if (level === 1) blocks.push(<h3 key={key}>{content}</h3>);
+      else if (level === 2) blocks.push(<h4 key={key}>{content}</h4>);
+      else blocks.push(<h5 key={key}>{content}</h5>);
+      index += 1;
+      continue;
+    }
+
+    const listMatch = line.match(/^\s*(?:([-*+])\s+|(\d+)[.)]\s+)(.+)$/);
+    if (listMatch) {
+      const ordered = Boolean(listMatch[2]);
+      const items: string[] = [];
+      while (index < lines.length) {
+        const item = lines[index].match(/^\s*(?:([-*+])\s+|(\d+)[.)]\s+)(.+)$/);
+        if (!item || Boolean(item[2]) !== ordered) break;
+        items.push(item[3]);
+        index += 1;
+      }
+      const List = ordered ? "ol" : "ul";
+      blocks.push(<List key={`list-${blocks.length}`}>{items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineFormattedText(item, `list-${blocks.length}-${itemIndex}`)}</li>)}</List>);
+      continue;
+    }
+
+    const paragraph: string[] = [];
+    while (index < lines.length && lines[index].trim() &&
+      !/^\s*```/.test(lines[index]) &&
+      !/^\s{0,3}#{1,6}\s+/.test(lines[index]) &&
+      !/^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(lines[index])) {
+      paragraph.push(lines[index++]);
+    }
+    blocks.push(<p key={`p-${blocks.length}`}>{paragraph.map((part, partIndex) => <span key={partIndex}>{partIndex > 0 && <br />}{renderInlineFormattedText(part, `p-${blocks.length}-${partIndex}`)}</span>)}</p>);
   }
-  flushBullets();
-  flushParagraph();
   return blocks;
 }
 
