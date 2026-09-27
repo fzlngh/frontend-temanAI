@@ -45,7 +45,10 @@ export default function AuthScreen() {
         </div>
         <p className="auth-eyebrow">RUANG PRIBADIMU</p>
         <h1>{mode === "signin" ? "Senang bertemu lagi." : "Mulai percakapanmu."}</h1>
-        <p className="auth-copy">Masuk untuk menyimpan obrolan dan melanjutkannya kapan saja.</p>
+        <p className="auth-copy">
+          Chatbot AI berbahasa Indonesia untuk mencari ide, memahami topik, menyusun
+          rencana, dan menulis. Masuk untuk menyimpan obrolan dan melanjutkannya kapan saja.
+        </p>
 
         {!isSupabaseConfigured && (
           <div className="auth-notice" role="alert">

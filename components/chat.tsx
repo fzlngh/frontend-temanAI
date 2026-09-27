@@ -599,7 +599,25 @@ export default function Chat() {
     offline: "Tidak terhubung",
   };
 
-  if (!authReady) return <main className="auth-shell"><div className="auth-loading">Memuat sesi...</div></main>;
+  if (!authReady) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-card" aria-labelledby="page-title">
+          <div className="auth-brand">
+            <span className="brand-mark">✳</span>
+            <span>teman<span className="brand-ai">ai</span></span>
+          </div>
+          <h1 id="page-title">Chatbot AI berbahasa Indonesia untuk ide dan obrolan</h1>
+          <p className="auth-copy">
+            TemanAI adalah asisten AI online untuk membantu mencari ide, memahami topik,
+            menyusun rencana, dan menulis. Masuk untuk memulai percakapan dan menyimpan
+            riwayat obrolan.
+          </p>
+          <p className="auth-loading" role="status">Memuat sesi...</p>
+        </section>
+      </main>
+    );
+  }
   if (!session) return <AuthScreen />;
 
   return (
