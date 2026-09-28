@@ -276,10 +276,11 @@ button { color: inherit; }
 .attachment-chip-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
 .attachment-name { overflow: hidden; color: #43564a; font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-details { color: #919d94; font-size: 9px; }
-.attachment-remove { display: grid; width: 26px; height: 26px; flex: 0 0 26px; place-items: center; border: 0; border-radius: 6px; background: transparent; color: #87958b; font-size: 18px; line-height: 1; cursor: pointer; }
+.attachment-summary { margin: 0 0 6px; color: #708176; font-size: 10px; font-weight: 600; }
+.attachment-remove { display: grid; width: 32px; height: 32px; flex: 0 0 32px; place-items: center; border: 0; border-radius: 6px; background: transparent; color: #87958b; font-size: 18px; line-height: 1; cursor: pointer; }
 .attachment-remove:hover:not(:disabled) { background: #f3e9e7; color: #9a544c; }
 .attachment-remove:disabled { opacity: .45; cursor: default; }
-.attachment-help { margin: 1px 0 6px; color: #98a39b; font-size: 9px; line-height: 1.45; }
+.attachment-help { margin: 1px 0 6px; color: #98a39b; font-size: 10px; line-height: 1.45; }
 .upload-status { display: flex; min-width: 0; align-items: center; gap: 7px; margin: 0 0 6px; color: #63816b; font-size: 9px; }
 .upload-spinner, .send-spinner { width: 13px; height: 13px; flex: 0 0 13px; border: 2px solid #d5e3d7; border-top-color: #4c8060; border-radius: 50%; animation: spin .75s linear infinite; }
 .send-spinner { width: 15px; height: 15px; flex-basis: 15px; border-color: #ffffff70; border-top-color: #fff; }
@@ -288,6 +289,7 @@ button { color: inherit; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; }
 .disclaimer { margin: 8px 0 0; color: #adb5af; text-align: center; font-size: 9px; }
 .error-notice, .setup-notice { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; padding: 9px 11px; border-radius: 8px; color: #9a544c; background: #fff4f1; font-size: 10px; line-height: 1.5; }
+.error-attachment-retained { display: block; margin-top: 3px; }
 .error-notice button { border: 0; background: transparent; color: inherit; font-size: 17px; cursor: pointer; }
 .setup-notice { display: block; color: #876834; background: #fff9eb; }
 .setup-notice code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; }
@@ -413,6 +415,7 @@ html[data-theme="dark"] .attachment-chip { border-color: #35473a; background: #1
 html[data-theme="dark"] .attach-button:hover:not(:disabled) { background: #26372b; }
 html[data-theme="dark"] .attachment-file-icon { background: #26372b; color: #b8ddbd; }
 html[data-theme="dark"] .attachment-name { color: #dce6de; }
+html[data-theme="dark"] .attachment-summary { color: #b4c4b7; }
 html[data-theme="dark"] .attachment-details,
 html[data-theme="dark"] .attachment-help { color: #9caaa0; }
 html[data-theme="dark"] .attachment-remove { color: #a5b3a9; }
@@ -473,6 +476,9 @@ html[data-theme="dark"] .edit-message button:last-child { border-color: #477960;
   .composer { padding-right: 10px; padding-left: 11px; }
   .composer-tools { gap: 8px; }
   .attachment-chip { max-width: 100%; }
+  .attach-button { min-height: 44px; }
+  .attachment-remove { width: 44px; height: 44px; flex-basis: 44px; }
+  .send-button { width: 44px; height: 44px; }
   .composer textarea { max-height: 30dvh; }
   .message-body { max-width: 86%; }
   .message-actions { opacity: 1; }

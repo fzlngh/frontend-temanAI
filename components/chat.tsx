@@ -62,7 +62,7 @@ function safeLinkTarget(href: string): string | null {
 }
 
 function getAttachmentMimeType(file: File): string | null {
-  const mimeType = file.type.toLowerCase();
+  const mimeType = file.type.toLowerCase().split(";", 1)[0].trim();
   const extension = file.name.split(".").pop()?.toLowerCase();
   const extensionMimeType: Record<string, string> = {
     pdf: "application/pdf",
@@ -71,9 +71,15 @@ function getAttachmentMimeType(file: File): string | null {
     png: "image/png",
     webp: "image/webp",
   };
-  const normalizedMimeType = mimeType === "image/jpg" ? "image/jpeg" : mimeType;
+  const normalizedMimeType = mimeType === "image/jpg" ? "image/jpeg"
+    : mimeType === "application/x-pdf" ? "application/pdf"
+      : mimeType;
   if (ATTACHMENT_MIME_TYPES.includes(normalizedMimeType)) return normalizedMimeType;
-  if (!mimeType) return extensionMimeType[extension ?? ""] ?? null;
+  // Some mobile browsers and document providers report a generic binary MIME
+  // type even when the filename clearly identifies a supported format.
+  if (!mimeType || ["application/octet-stream", "binary/octet-stream"].includes(mimeType)) {
+    return extensionMimeType[extension ?? ""] ?? null;
+  }
   return null;
 }
 
@@ -83,11 +89,16 @@ function readAttachmentAsBase64(file: File, onProgress?: (loaded: number) => voi
     reader.onload = () => {
       const result = typeof reader.result === "string" ? reader.result : "";
       const commaIndex = result.indexOf(",");
-      if (commaIndex < 0) {
+      if (!result.startsWith("data:") || commaIndex < 0 || !result.slice(0, commaIndex).endsWith(";base64")) {
         reject(new Error(`Berkas ${file.name} tidak dapat dibaca.`));
         return;
       }
-      resolve(result.slice(commaIndex + 1));
+      const data = result.slice(commaIndex + 1);
+      if (data && !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+        reject(new Error(`Berkas ${file.name} menghasilkan data yang tidak valid.`));
+        return;
+      }
+      resolve(data);
     };
     reader.onerror = () => reject(new Error(`Berkas ${file.name} tidak dapat dibaca.`));
     reader.onabort = () => reject(new Error(`Pembacaan berkas ${file.name} dibatalkan.`));
@@ -96,6 +107,40 @@ function readAttachmentAsBase64(file: File, onProgress?: (loaded: number) => voi
     };
     reader.readAsDataURL(file);
   });
+}
+
+async function encodeAttachments(
+  selected: SelectedAttachment[],
+  onProgress?: (percent: number) => void,
+): Promise<ApiAttachment[]> {
+  const totalSize = selected.reduce((total, item) => total + item.file.size, 0);
+  let completedSize = 0;
+  const encoded: ApiAttachment[] = [];
+  for (const item of selected) {
+    const data = await readAttachmentAsBase64(item.file, (loaded) => {
+      if (totalSize > 0) onProgress?.(Math.min(99, Math.round(((completedSize + loaded) / totalSize) * 100)));
+    });
+    encoded.push({ name: item.file.name, mimeType: item.mimeType, data });
+    completedSize += item.file.size;
+    if (totalSize > 0) onProgress?.(Math.min(99, Math.round((completedSize / totalSize) * 100)));
+  }
+  return encoded;
+}
+
+function hasAttachmentLabel(content: string): boolean {
+  return /\n\nLampiran: .+$/.test(content);
+}
+
+function attachmentLabel(content: string): string {
+  return content.match(/\n\nLampiran: (.+)$/)?.[1] ?? "";
+}
+
+function removeAttachmentLabel(content: string): string {
+  return content.replace(/\n\nLampiran: .+$/, "");
+}
+
+function withAttachmentLabel(content: string, names: string[]): string {
+  return names.length ? `${content}\n\nLampiran: ${names.join(", ")}` : content;
 }
 
 function renderInlineFormattedText(text: string, keyPrefix = "inline"): React.ReactNode[] {
@@ -250,7 +295,7 @@ export default function Chat() {
   const [activeConversationId, setActiveConversationId] = useState("");
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<SelectedAttachment[]>([]);
-  const [uploadPhase, setUploadPhase] = useState<"idle" | "preparing" | "sending">("idle");
+  const [uploadPhase, setUploadPhase] = useState<"idle" | "preparing" | "saving" | "sending">("idle");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [editingMessageId, setEditingMessageId] = useState("");
   const [editingDraft, setEditingDraft] = useState("");
@@ -268,6 +313,7 @@ export default function Chat() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const objectUrls = useRef(new Map<string, string>());
+  const messageAttachments = useRef(new Map<string, SelectedAttachment[]>());
   const bottomRef = useRef<HTMLDivElement>(null);
   const requestSequence = useRef(0);
   const historyRequestSequence = useRef(0);
@@ -301,6 +347,10 @@ export default function Chat() {
       }
       if (file.size > MAX_ATTACHMENT_SIZE) {
         errors.push(`${file.name}: ukuran file melebihi 6 MiB.`);
+        continue;
+      }
+      if (file.size === 0) {
+        errors.push(`${file.name}: file kosong tidak dapat dikirim.`);
         continue;
       }
       const mimeType = getAttachmentMimeType(file);
@@ -441,6 +491,10 @@ export default function Chat() {
 
   const askAssistant = async (history: Message[], requestAttachments: ApiAttachment[] = []) => {
     if (!session) throw new Error("Sesi masuk sudah berakhir. Silakan masuk kembali.");
+    if (requestAttachments.some(({ mimeType, data }) =>
+      !ATTACHMENT_MIME_TYPES.includes(mimeType) || (data.length > 0 && !/^[A-Za-z0-9+/]+={0,2}$/.test(data)))) {
+      throw new Error("Lampiran tidak valid. Pilih kembali file PDF atau gambar yang didukung.");
+    }
     const recent = history.slice(-20).map(({ role, content }) => ({ role, content }));
     if (recent[0]?.role === "assistant") recent.shift();
     const controller = new AbortController();
@@ -452,9 +506,12 @@ export default function Chat() {
         Authorization: `Bearer ${session.access_token}`,
       },
       body: JSON.stringify({
-        messages: recent,
+        messages: recent.map((message) => ({
+          ...message,
+          content: message.role === "user" ? removeAttachmentLabel(message.content) : message.content,
+        })),
         assistantName,
-        ...(requestAttachments.length ? { attachments: requestAttachments } : {}),
+        attachments: requestAttachments,
       }),
       signal: controller.signal,
     });
@@ -464,6 +521,16 @@ export default function Chat() {
       throw new Error("Asisten belum memberikan jawaban. Coba kirim ulang, ya.");
     }
     return data.reply;
+  };
+
+  const getMessageAttachments = (message: Message): SelectedAttachment[] | null => {
+    const cached = messageAttachments.current.get(message.id);
+    if (cached?.length) return cached;
+    if (!hasAttachmentLabel(message.content)) return [];
+    const matching = attachments.length > 0 && attachments.map(({ file }) => file.name).join(", ") === attachmentLabel(message.content);
+    if (!matching || !attachments.length) return null;
+    messageAttachments.current.set(message.id, attachments);
+    return attachments;
   };
 
   const loadConversation = async (conversationId: string) => {
@@ -487,7 +554,6 @@ export default function Chat() {
     setMessages((data ?? []) as Message[]);
     setActiveConversationId(conversationId);
     setDraft("");
-    clearAttachments();
     setEditingMessageId("");
     setSidebarOpen(false);
   };
@@ -500,6 +566,16 @@ export default function Chat() {
     const content = selectedAttachments.length
       ? `${question}\n\nLampiran: ${selectedAttachments.map(({ file }) => file.name).join(", ")}`
       : question;
+    const lastMessage = messages[messages.length - 1];
+    const lastAttachments = lastMessage ? messageAttachments.current.get(lastMessage.id) : undefined;
+    const samePendingAttachments = lastAttachments?.length === selectedAttachments.length &&
+      lastAttachments.every((item, index) => item.id === selectedAttachments[index]?.id);
+    const samePendingQuestion = lastMessage?.content === content ||
+      (!text.trim() && lastMessage?.role === "user" && hasAttachmentLabel(lastMessage.content));
+    if (lastMessage?.role === "user" && samePendingQuestion && samePendingAttachments && selectedAttachments.length > 0) {
+      await retryMessage(lastMessage);
+      return;
+    }
     setError("");
     setLoading(true);
     setUploadPhase(selectedAttachments.length ? "preparing" : "idle");
@@ -507,19 +583,9 @@ export default function Chat() {
     requestSequence.current += 1;
     const requestId = requestSequence.current;
     try {
-      const totalSize = selectedAttachments.reduce((total, item) => total + item.file.size, 0);
-      let completedSize = 0;
-      const requestAttachments: ApiAttachment[] = [];
-      for (const item of selectedAttachments) {
-        const data = await readAttachmentAsBase64(item.file, (loaded) => {
-          if (totalSize > 0) setUploadProgress(Math.min(99, Math.round(((completedSize + loaded) / totalSize) * 100)));
-        });
-        requestAttachments.push({ name: item.file.name, mimeType: item.mimeType, data });
-        completedSize += item.file.size;
-        setUploadProgress(totalSize ? Math.min(99, Math.round((completedSize / totalSize) * 100)) : 0);
-        if (requestId !== requestSequence.current) return;
-      }
-      setUploadPhase(selectedAttachments.length ? "sending" : "idle");
+      const requestAttachments = await encodeAttachments(selectedAttachments, setUploadProgress);
+      if (requestId !== requestSequence.current) return;
+      setUploadPhase(selectedAttachments.length ? "saving" : "idle");
 
       let conversationId = activeConversationId;
       if (!conversationId) {
@@ -541,9 +607,11 @@ export default function Chat() {
         .select("id,role,content,sequence")
         .single();
       if (saveUserError) throw saveUserError;
+      if (selectedAttachments.length) messageAttachments.current.set(savedUserMessage.id, selectedAttachments);
       const updated = [...messages, savedUserMessage as Message];
       setMessages(updated);
 
+      setUploadPhase(selectedAttachments.length ? "sending" : "idle");
       const reply = await askAssistant(updated, requestAttachments);
       if (requestId !== requestSequence.current) return;
       const { data: savedAssistantMessage, error: saveAssistantError } = await supabase
@@ -554,6 +622,7 @@ export default function Chat() {
       if (saveAssistantError) throw saveAssistantError;
       setMessages((current) => [...current, savedAssistantMessage as Message]);
       setDraft("");
+      messageAttachments.current.delete(savedUserMessage.id);
       clearAttachments();
       await loadConversations();
       void checkHealth();
@@ -573,22 +642,37 @@ export default function Chat() {
     if (!supabase || !session || !activeConversationId || loading) return;
     const index = messages.findIndex((item) => item.id === message.id);
     if (index < 0 || message.role !== "user") return;
+    const selectedAttachments = getMessageAttachments(message);
+    if (!selectedAttachments) {
+      setError("Lampiran pesan ini tidak tersedia. Pilih kembali file yang sama di kotak pesan, lalu coba kirim ulang.");
+      return;
+    }
     const history = messages.slice(0, index + 1);
     setLoading(true);
     setError("");
+    setUploadPhase(selectedAttachments.length ? "preparing" : "idle");
+    setUploadProgress(0);
     requestSequence.current += 1;
     const requestId = requestSequence.current;
     try {
-      const reply = await askAssistant(history);
+      const requestAttachments = await encodeAttachments(selectedAttachments, setUploadProgress);
+      if (requestId !== requestSequence.current) return;
+      setUploadPhase(selectedAttachments.length ? "sending" : "idle");
+      const reply = await askAssistant(history, requestAttachments);
       if (requestId !== requestSequence.current) return;
       const { error: deleteError } = await supabase.from("messages")
         .delete().eq("conversation_id", activeConversationId).gt("sequence", message.sequence);
       if (deleteError) throw deleteError;
+      messages.slice(index + 1).forEach((discarded) => messageAttachments.current.delete(discarded.id));
       const { data: saved, error: insertError } = await supabase.from("messages")
         .insert({ conversation_id: activeConversationId, user_id: session.user.id, role: "assistant", content: reply, sequence: message.sequence + 1 })
         .select("id,role,content,sequence").single();
       if (insertError) throw insertError;
       setMessages([...history, saved as Message]);
+      messageAttachments.current.delete(message.id);
+      if (index === messages.length - 1 && draft.trim() === removeAttachmentLabel(message.content).trim()) setDraft("");
+      if (selectedAttachments.length && selectedAttachments.every((item, attachmentIndex) => attachments[attachmentIndex]?.id === item.id) &&
+        attachments.length === selectedAttachments.length) clearAttachments();
       await loadConversations();
     } catch (retryError) {
       if (requestId === requestSequence.current) setError(retryError instanceof Error ? retryError.message : "Pesan belum berhasil dikirim ulang.");
@@ -596,6 +680,7 @@ export default function Chat() {
       if (requestId === requestSequence.current) {
         activeRequest.current = null;
         setLoading(false);
+        setUploadPhase("idle");
       }
     }
   };
@@ -606,26 +691,41 @@ export default function Chat() {
     if (!content) return;
     const index = messages.findIndex((item) => item.id === message.id);
     if (index < 0) return;
-    const history = [...messages.slice(0, index), { ...message, content }];
+    const selectedAttachments = getMessageAttachments(message);
+    if (!selectedAttachments) {
+      setError("Lampiran pesan ini tidak tersedia. Pilih kembali file yang sama sebelum mengedit dan mengirim ulang.");
+      return;
+    }
+    const persistedContent = withAttachmentLabel(content, selectedAttachments.map(({ file }) => file.name));
+    const history = [...messages.slice(0, index), { ...message, content: persistedContent }];
     setLoading(true);
     setError("");
+    setUploadPhase(selectedAttachments.length ? "preparing" : "idle");
+    setUploadProgress(0);
     requestSequence.current += 1;
     const requestId = requestSequence.current;
     try {
-      const reply = await askAssistant(history);
+      const requestAttachments = await encodeAttachments(selectedAttachments, setUploadProgress);
       if (requestId !== requestSequence.current) return;
-      const { error: updateError } = await supabase.from("messages").update({ content })
+      setUploadPhase(selectedAttachments.length ? "sending" : "idle");
+      const reply = await askAssistant(history, requestAttachments);
+      if (requestId !== requestSequence.current) return;
+      const { error: updateError } = await supabase.from("messages").update({ content: persistedContent })
         .eq("id", message.id).eq("conversation_id", activeConversationId);
       if (updateError) throw updateError;
       const { error: deleteError } = await supabase.from("messages").delete()
         .eq("conversation_id", activeConversationId).gt("sequence", message.sequence);
       if (deleteError) throw deleteError;
+      messages.slice(index + 1).forEach((discarded) => messageAttachments.current.delete(discarded.id));
       const { data: saved, error: insertError } = await supabase.from("messages")
         .insert({ conversation_id: activeConversationId, user_id: session.user.id, role: "assistant", content: reply, sequence: message.sequence + 1 })
         .select("id,role,content,sequence").single();
       if (insertError) throw insertError;
       setMessages([...history, saved as Message]);
       setEditingMessageId("");
+      messageAttachments.current.delete(message.id);
+      if (selectedAttachments.length && selectedAttachments.every((item, attachmentIndex) => attachments[attachmentIndex]?.id === item.id) &&
+        attachments.length === selectedAttachments.length) clearAttachments();
       await loadConversations();
     } catch (editError) {
       if (requestId === requestSequence.current) setError(editError instanceof Error ? editError.message : "Pesan belum berhasil diperbarui.");
@@ -633,6 +733,7 @@ export default function Chat() {
       if (requestId === requestSequence.current) {
         activeRequest.current = null;
         setLoading(false);
+        setUploadPhase("idle");
       }
     }
   };
@@ -656,12 +757,14 @@ export default function Chat() {
   };
 
   const clearChat = () => {
+    if (attachments.length && !window.confirm("Lampiran yang masih dipilih di kotak pesan akan dihapus. Tetap mulai percakapan baru?")) return;
     requestSequence.current += 1;
     activeRequest.current?.abort();
     activeRequest.current = null;
     setMessages([]);
     setDraft("");
     clearAttachments();
+    messageAttachments.current.clear();
     setActiveConversationId("");
     setEditingMessageId("");
     setError("");
@@ -671,11 +774,13 @@ export default function Chat() {
 
   const signOut = async () => {
     if (!supabase) return;
+    if (attachments.length && !window.confirm("Lampiran yang masih dipilih di kotak pesan akan dihapus saat kamu keluar. Tetap keluar?")) return;
     requestSequence.current += 1;
     activeRequest.current?.abort();
     activeRequest.current = null;
     setLoading(false);
     clearAttachments();
+    messageAttachments.current.clear();
     const { error: signOutError } = await supabase.auth.signOut();
     if (signOutError) setError(`Gagal keluar: ${signOutError.message}`);
   };
@@ -910,7 +1015,7 @@ export default function Chat() {
                     )}
                     {message.role === "user" && editingMessageId !== message.id && (
                       <div className="message-actions">
-                        <button className="copy-button" type="button" disabled={loading} onClick={() => { setEditingMessageId(message.id); setEditingDraft(message.content); }}>Edit</button>
+                        <button className="copy-button" type="button" disabled={loading} onClick={() => { setEditingMessageId(message.id); setEditingDraft(removeAttachmentLabel(message.content)); }}>Edit</button>
                         <button className="copy-button" type="button" disabled={loading} onClick={() => void retryMessage(message)}>Kirim ulang</button>
                       </div>
                     )}
@@ -934,7 +1039,14 @@ export default function Chat() {
         <div className="composer-wrap">
           {error && (
             <div className="error-notice" role="alert">
-              <span>{error}</span>
+              <div>
+                <span>{error}</span>
+                {attachments.length > 0 && (
+                  <span className="error-attachment-retained">
+                    Lampiran tetap dipilih. Jika pesan sudah muncul di atas, gunakan “Kirim ulang” agar tidak membuat pesan duplikat.
+                  </span>
+                )}
+              </div>
               <button type="button" onClick={() => setError("")} aria-label="Tutup pesan error">×</button>
             </div>
           )}
@@ -955,8 +1067,12 @@ export default function Chat() {
               onChange={(event) => handleAttachmentSelection(event.currentTarget.files)}
             />
             {attachments.length > 0 && (
-              <ul className="attachment-list" aria-label="Lampiran terpilih">
-                {attachments.map(({ id, file, mimeType, previewUrl }) => (
+            <>
+            <p className="attachment-summary" aria-live="polite">
+              {attachments.length} dari {MAX_ATTACHMENT_COUNT} file dipilih · {(attachments.reduce((total, item) => total + item.file.size, 0) / (1024 * 1024)).toFixed(1)} dari 12 MiB
+            </p>
+            <ul className="attachment-list" aria-label="Lampiran terpilih">
+              {attachments.map(({ id, file, mimeType, previewUrl }) => (
                   <li className="attachment-chip" key={id}>
                     {previewUrl ? (
                       // Local object URLs are kept only in memory and revoked when removed.
@@ -979,7 +1095,9 @@ export default function Chat() {
                   </li>
                 ))}
               </ul>
+              </>
             )}
+            <p className="attachment-help">PDF, JPEG, PNG, atau WebP · maksimal 6 MiB per file dan 12 MiB total.</p>
             <textarea
               ref={textareaRef}
               rows={1}
@@ -993,7 +1111,9 @@ export default function Chat() {
             {uploadPhase !== "idle" && (
               <div className={`upload-status ${uploadPhase}`} role="status" aria-live="polite">
                 <span className="upload-spinner" aria-hidden="true" />
-                {uploadPhase === "preparing" ? `Menyiapkan lampiran ${uploadProgress}%` : "Mengirim lampiran…"}
+                {uploadPhase === "preparing" ? `Menyiapkan lampiran ${uploadProgress}%`
+                  : uploadPhase === "saving" ? "Menyimpan pesan sebelum dikirim…"
+                    : "Mengirim pesan dan lampiran; menunggu jawaban…"}
                 {uploadPhase === "preparing" && (
                   <span
                     className="upload-progress-track"
@@ -1015,12 +1135,18 @@ export default function Chat() {
                   aria-label={`Lampirkan PDF atau foto${attachments.length ? `, ${attachments.length} dari ${MAX_ATTACHMENT_COUNT} file dipilih` : ""}`}
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  <Icon name="attach" size={16} /><span>Lampirkan</span>
+                  <Icon name="attach" size={16} /><span>{attachments.length ? `Tambah file (${attachments.length}/${MAX_ATTACHMENT_COUNT})` : "Lampirkan"}</span>
                 </button>
                 <span className="composer-tip"><span>↵</span> kirim <b>·</b> <span>⇧ ↵</span> baris baru</span>
               </div>
-              <button className="send-button" type="submit" disabled={(!draft.trim() && !attachments.length) || loading} aria-label="Kirim pesan">
-                {loading && uploadPhase === "sending" ? <span className="send-spinner" aria-hidden="true" /> : <Icon name="send" size={17} />}
+              <button
+                className="send-button"
+                type="submit"
+                disabled={(!draft.trim() && !attachments.length) || loading}
+                aria-label={loading ? "Pesan sedang diproses" : `Kirim pesan${attachments.length ? ` dengan ${attachments.length} lampiran` : ""}`}
+                aria-busy={loading}
+              >
+                {loading ? <span className="send-spinner" aria-hidden="true" /> : <Icon name="send" size={17} />}
               </button>
             </div>
           </form>
