@@ -1097,7 +1097,6 @@ export default function Chat() {
               </ul>
               </>
             )}
-            <p className="attachment-help">PDF, JPEG, PNG, atau WebP · maksimal 6 MiB per file dan 12 MiB total.</p>
             <textarea
               ref={textareaRef}
               rows={1}
